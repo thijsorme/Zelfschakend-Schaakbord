@@ -4,7 +4,7 @@ import keyboard
 
 
 arduino = Serial(port='COM5', baudrate=9600, timeout=0)
-pressedLastFrame = {"up": False, "right": False, "down": False, "left": False}
+pressedLastFrame = {"up": False, "right": False, "down": False, "left": False, "q": False, "w": False}
 
 def write_read(x):
     arduino.write(bytes(x, 'ascii'))
@@ -25,7 +25,6 @@ while True:
             pressedLastFrame[key] = False
             print(i+35)
             write_read(chr(i + 35))
-    
     time.sleep(0.001)
     data = arduino.read()
     if data != b"":

@@ -1,35 +1,36 @@
 // date: 15/08/2023
 // uitbereiding van pythoncommunicationtest,
 // queue implementatie van https://www.geeksforgeeks.org/queue-linked-list-implementation/
-#include <string>
-int incomingBytes[2] = {0,0};
-bool firstByteIn = false;
 
-bool magnetBit;
+// constanten / intstellingen
+const int dirPinA = 13;
+const int stepPinA = 12;
+const int dirPinB = 8;
+const int stepPinB = 7;
+const int magnetPin = 4;
 
-const int specialOperationCode = 17;
-const int calibrationKey = 0;
-const int magnetOnKey = 1;
-const int magnetOffKey = 2;
+const int stepsHorizontalMove = 55;
+const int stepsDiagonalMove = 110;
 
-const int dirPinA = 8;
-const int stepPinA = 7;
-const int dirPinB = 13;
-const int stepPinB = 12;
+const int SPECIAL_OP = 17;
+const int K_CALIBRATION = 0;
+const int K_MAGNET_ON = 1;
+const int K_MAGNET_OFF = 2;
+const int K_MOVE_UP = 3;
+const int K_MOVE_DOWN = 4;
+const int K_MOVE_LEFT = 5;
+const int K_MOVE_RIGHT = 6;
+const int K_MOVE_AUP = 7;
+const int K_MOVE_BUP = 8;
+const int K_MOVE_BDOWN = 9;
+const int K_MOVE_ADOWN = 10;
 
-int currentA;
-int currentB;
-int toMoveA;
-int toMoveB;
 
-const int stepsPerLoop = 100;
-const int moveAmount = 1;
-
-const int mmsSpeedDelayMagnetOff = 600;
-const int mmsSpeedDelayMagnetOn = 1000;
-int mmsSpeedDelay = mmsSpeedDelayMagnetOff;
 // TODO: calculate
-const int stepsToCM = 50; // 200 * (cm per rotation) 
+const int stepsToCM = 115; // 200 * (cm per rotation) 
+
+const int mmsSpeedDelayMagnetOff = 450;
+const int mmsSpeedDelayMagnetOn = 1000;
 
 enum State {
   Idle, // fully idle, not moving, ignoring input
@@ -40,10 +41,30 @@ enum State {
   FinishAction, // just done doing anything (update state), accepting input
 };
 
-bool movingMotorA = false;
-bool movingMotorB = false;
+bool movingMotorA;
+bool movingMotorB;
 
+bool magnetBit;
+
+// in steps:
+int currentX;
+int currentY;
+int toMoveA;
+int toMoveB;
+
+int mmsSpeedDelay = mmsSpeedDelayMagnetOff;
 State state = State::Idle;
+
+int incomingBytes[2] = {0,0};
+bool firstByteIn = false;
+
+
+void fancyPrint(String msg){
+  String complete_msg = "{" + msg + "}";
+  char *to_send = &complete_msg[0];
+  Serial.write(to_send);
+}
+
 
 struct QNode {
     int x;
@@ -108,37 +129,19 @@ void setup() {
 	pinMode(dirPinA, OUTPUT);
 	pinMode(stepPinB, OUTPUT);
 	pinMode(dirPinB, OUTPUT);
+	pinMode(magnetPin, OUTPUT);
 	Serial.begin(9600);
 
   // start accepting input
   state = State::Queueing;
 }
 
-void printWithFormat(String message){
-  String completeMsg = "{" + message + "}";
-  char *toSend = &completeMsg[0];
-  Serial.write(toSend);
-}
-
 // convert xy coord (0-16) to ab location (real world)
-int aCoord(int x, int y){
-  // 200 steps per revolution - x cm per revolution
-  // TODO: calculation
-  int value = stepsToCM*(x+y)/2;
-  printWithFormat("a");
-  printWithFormat(String(value));
-  // std::cout << "a " << value << std::endl;
-  return value;
+float bCoord(float x, float y){
+  return (x-y) * -stepsToCM; // (- since flipped)
 }
-int bCoord(int x, int y){
-  // 200 steps per revolution - x cm per revolution
-  // TODO: calculation
-  int value = stepsToCM*(x-y)/2;
-  printWithFormat("B");
-  printWithFormat(String(value));
-  // std::cout << "b " << value << std::endl;
-
-  return value;
+float aCoord(float x, float y){
+  return (x+y) * -stepsToCM; // (- since flipped)
 }
 void stepA()
 {
@@ -193,11 +196,13 @@ void checkForInput(){
   if (Serial.available() > 0) {
     int incoming = Serial.read() - ' ';
     // std::cout << "incoming info: " << incoming << std::endl;
-    if(incoming >= 0 && ((incoming == specialOperationCode && !firstByteIn) || incoming <= 16)){
+    fancyPrint("in0: " + String(incoming));
+    if(incoming >= 0 && ((incoming == SPECIAL_OP && !firstByteIn) || incoming <= 16)){
       incomingBytes[firstByteIn] = incoming;
       if(firstByteIn){
-        printWithFormat(String(incomingBytes[0]));
-        printWithFormat(String(incomingBytes[1]));
+        
+        // fancyPrint("inA: " + String(incomingBytes[0]));
+        // fancyPrint("inB: " + String(incomingBytes[1]));
         moveQ.enQueue(incomingBytes[0],incomingBytes[1]);
         incomingBytes[0] = 0;
         incomingBytes[1] = 0;
@@ -214,6 +219,17 @@ void checkForInput(){
 
 void setMagnet(){
   // turn on or off magnet based on magnetBit
+  // digitalWrite(magnetPin, magnetBit);
+  moveQ.deQueue(); 
+  fancyPrint(String(magnetBit));
+  if(magnetBit){
+      mmsSpeedDelay = mmsSpeedDelayMagnetOn;
+      digitalWrite(magnetPin, HIGH);
+  } else {
+      mmsSpeedDelay = mmsSpeedDelayMagnetOff;
+      digitalWrite(magnetPin, LOW);
+  }
+
 }
 
 void allowStateSwitch(){
@@ -222,40 +238,120 @@ void allowStateSwitch(){
     state = State::Queueing;
     return;
   }
-  if(moveQ.front->x == specialOperationCode){
-    if(moveQ.front->y == magnetOffKey) {
+  delay(100);
+  if(moveQ.front->x == SPECIAL_OP){
+    if(moveQ.front->y == K_MAGNET_OFF) {
       magnetBit = false;
-      mmsSpeedDelay = mmsSpeedDelayMagnetOff;
       // state = State::MagnetOperation;
       setMagnet();
       return;
     }
-    if(moveQ.front->y == magnetOnKey) {
+    if(moveQ.front->y == K_MAGNET_ON) {
       magnetBit = true;
-      mmsSpeedDelay = mmsSpeedDelayMagnetOn;
       // state = State::MagnetOperation;
       setMagnet();
       return;
     }
-    if(moveQ.front->y == calibrationKey){
-      state = State::Calibrating;
+    if(moveQ.front->y == K_CALIBRATION){
+      currentX = 0;
+      currentY = 0;
+      toMoveA = 0;
+      toMoveB = 0;
+      fancyPrint("hi");
+      moveQ.deQueue();
       return;
-    } else {
-      // throw std::invalid_argument("non valid special operation recieved");
-      printWithFormat("non valid special operation recieved");
     }
+    if(moveQ.front->y == K_MOVE_UP){
+      toMoveA += stepsHorizontalMove;
+      toMoveB -= stepsHorizontalMove;    
+      currentY -= stepsHorizontalMove;
+      movingMotorA = true;
+      movingMotorB = true;  
+      state = State::Moving;
+      moveQ.deQueue();
+      return;
+    }
+    if(moveQ.front->y == K_MOVE_DOWN){
+      toMoveA -= stepsHorizontalMove;
+      toMoveB += stepsHorizontalMove;      
+      currentY += stepsHorizontalMove;   
+      movingMotorA = true;
+      movingMotorB = true; 
+      state = State::Moving;
+      moveQ.deQueue();
+      return;
+    }
+    if(moveQ.front->y == K_MOVE_LEFT){
+      toMoveA += stepsHorizontalMove;
+      toMoveB += stepsHorizontalMove;      
+      currentX -= stepsHorizontalMove;  
+      movingMotorA = true;
+      movingMotorB = true; 
+      state = State::Moving;   
+      moveQ.deQueue();
+      return;
+    }
+    if(moveQ.front->y == K_MOVE_RIGHT){
+      toMoveA -= stepsHorizontalMove;
+      toMoveB -= stepsHorizontalMove;      
+      currentX += stepsHorizontalMove;   
+      movingMotorA = true;
+      movingMotorB = true; 
+      state = State::Moving;  
+      moveQ.deQueue();
+      return;
+    }
+    if(moveQ.front->y == K_MOVE_AUP){
+      toMoveA += stepsDiagonalMove;
+      currentX -= stepsDiagonalMove/2;
+      currentY -= stepsDiagonalMove/2;
+      movingMotorA = true;
+      state = State::Moving;
+      moveQ.deQueue();
+      return;
+    }
+    if(moveQ.front->y == K_MOVE_ADOWN){
+      toMoveA -= stepsDiagonalMove;
+      currentX += stepsDiagonalMove/2;
+      currentY += stepsDiagonalMove/2;
+      movingMotorA = true;
+      state = State::Moving;
+      moveQ.deQueue();
+      return;
+    }
+    if(moveQ.front->y == K_MOVE_BUP){
+      toMoveB += stepsDiagonalMove;
+      currentX -= stepsDiagonalMove/2;
+      currentY += stepsDiagonalMove/2;
+      movingMotorB = true;
+      state = State::Moving;
+      moveQ.deQueue();
+      return;
+    }
+    if(moveQ.front->y == K_MOVE_BDOWN){
+      toMoveB -= stepsDiagonalMove;
+      currentX += stepsDiagonalMove/2;
+      currentY -= stepsDiagonalMove/2;
+      movingMotorB = true;
+      state = State::Moving;
+      moveQ.deQueue();
+      return;
+    }
+    // throw std::invalid_argument("non valid special operation recieved");
+    fancyPrint("non valid special operation recieved");
+  
   }
     
   state = State::Moving;
   // std::cout << "go te next coord" << std::endl;
   // stepperA.moveTo(aCoord(moveQ.front->x,moveQ.front->y));
   // stepperB.moveTo(bCoord(moveQ.front->x,moveQ.front->y));
-  int newCoordA = aCoord(moveQ.front->x,moveQ.front->y);
-  int newCoordB = bCoord(moveQ.front->x,moveQ.front->y);
-  toMoveA = newCoordA - currentA;
-  toMoveB = newCoordB - currentB;
-  currentA = newCoordA;
-  currentB = newCoordB;
+  toMoveA = aCoord(moveQ.front->x,moveQ.front->y) - aCoord((float)currentX/(float)stepsToCM,(float)currentY/(float)stepsToCM);
+  toMoveB = bCoord(moveQ.front->x,moveQ.front->y) - bCoord((float)currentX/(float)stepsToCM,(float)currentY/(float)stepsToCM);
+  // fancyPrint("current: (" + String(aCoord(currentX,currentY) + ", " + String(bCoord(currentX,currentY)));
+  currentX = moveQ.front->x * stepsToCM;
+  currentY = moveQ.front->y * stepsToCM;
+  // fancyPrint("next: (" + String(aCoord(moveQ.front->x,moveQ.front->y)) + ", " + String(bCoord(moveQ.front->x,moveQ.front->y)));
   movingMotorA = true;
   movingMotorB = true;
   moveQ.deQueue(); 
@@ -288,6 +384,7 @@ void calibrating(){
     // check still have to move xy
     // move xy accordingly
     // both done? exit loop
+    break;
   }
   // set 0 0
   runMotors();
